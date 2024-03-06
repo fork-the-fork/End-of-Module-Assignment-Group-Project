@@ -23,8 +23,8 @@ The client can specify the pickling format for dictionary data and also choose t
              +-----------------TCP/IP-----------------------+
                          BUFFER_SIZE: 1111               
 
-Both the client and the server use the TCP Protocol for communication
-The client is located at IP Address:192.168.x.xx and port: 8080
+#Both the client and the server use the TCP Protocol for communication
+#The client is located at IP Address:192.168.x.xx and port: 8080
 The server is located at IP address:192.168.x.xx and port: 6868
 Both client and server communication are encrypted using fernet Encryption method and we use AES (advanced encryption standard) for encryption in storage
 The client send two types of data to the server: a dictionary and an encrypted text file
