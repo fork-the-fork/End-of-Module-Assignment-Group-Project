@@ -1,5 +1,5 @@
-End_Module_Assignment_Group B
-Members: Aljunaydi, Azmi Chahal, Dang Dong, Thomas Lundie, Adhir Soechit
+## End_Module_Assignment_Group B
+## Members: Aljunaydi, Azmi Chahal, Dang Dong, Thomas Lundie, Adhir Soechit
 
 ## Overview
 This project implements a client-server network where the client can send dictionary data or text files to the server. 
