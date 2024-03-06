@@ -35,6 +35,7 @@ The client can specify the pickling format for dictionary data and also choose t
 ##### BUFFER_SIZE, denoting the size of the buffer used for sending and receiving data
 
 ## Unit test
+### to be updated. 
 
 ## license 
 Distributed under the MIT License. See LICENSE.txt for more information.
