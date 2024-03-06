@@ -39,6 +39,19 @@ The client can specify the pickling format for dictionary data and also choose t
 ## license 
 Distributed under the MIT License. See LICENSE.txt for more information.
 
-## Requirements
-No need specifict dictionary/binary to run the code as the code is written by basic Python dictionary only.
-Recommend to open by visual studio
+## Instructions:
+1. Setup:
+   - Ensure you have Python installed on your machine.
+   - Clone the project repository from the Git repo at: https://github.com/fork-the-fork/End-of-Module-Assignment-Group-Project/blob/main/LICENSE
+
+2. Running the Server:
+   - Open a terminal or command prompt.
+   - Navigate to the directory containing server.py.
+   - Run the command: python server.py
+   - The server will start listening for incoming connections on the specified host and port as above architectre
+
+3. Running the Client:
+   - Open another terminal or command prompt.
+   - Navigate to the directory containing client.py.
+   - Run the command: python client.py
+   - The client will connect to the server and send dictionary data and files
