@@ -229,6 +229,7 @@ handler = ServerHandler()
 
 tcpsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 tcpsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+tcpsock.settimeout(30)
 tcpsock.bind((TCP_IP, TCP_PORT))
 threads = []
 
