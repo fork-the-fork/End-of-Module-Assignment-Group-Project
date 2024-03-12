@@ -1,9 +1,12 @@
 import socket
 import sys
+import time
+from datetime import datetime
+from pathlib import Path
 import json
 import pickle
 import xml.etree.ElementTree as ET
-import cryptography
+import configparser
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization
@@ -15,6 +18,9 @@ class InvalidHeader(Exception):
 
 class DuplicateSession(Exception):
     """A second session was opened on the same socket."""
+
+class UnsupportedTransfer(Exception):
+    """An unsupported file transfer was requested."""
 
 class EncryptionError(Exception):
     """An encryption error occured."""
@@ -32,17 +38,28 @@ def read_from_socket_upto_target(sock, target):
     return buffer
 
 class ServerHandler():
-    def __init__(self):
-        self.initialise_server_settings()
-        if server_mode == "PRINT":
-            self.stream = sys.stdout
-        else:
-            self.stream = open(r"C:\Temp\hello.txt", "w")
+    def __init__(self, config):
+        self.initialise_server_settings(config)
         self.initialise_encryption_context()
     
-    def initialise_server_settings(self):
-        self.public_key_file = r"C:\Temp\pubkey.pem"
-        self.private_key_file = r"C:\Temp\privatekey.pem"
+    def initialise_server_settings(self, config):
+        # Encryption Settings
+        encryption_conf = config["encryption"]
+        self.encryption_enabled = encryption_conf["enabled"]
+        self.public_key_file = encryption_conf["public_key_file"]
+        self.private_key_file = encryption_conf["private_key_file"]
+
+        # Server Output Settings
+        output_conf = config["output"]
+        self.file_output_enabled = output_conf["file_output_enabled"]
+        self.file_output_directory = output_conf["file_output_directory"]
+        self.file_output_format = output_conf["file_output_format"]
+        self.file_name_format = output_conf["file_name_format"]
+        self.print_output_enabled = output_conf["print_output_enabled"]
+
+        # Serialization Settings
+        serializtion_conf = config["serialization"]
+        self.enable_pickle = serializtion_conf["enable_pickle"]
 
     def initialise_encryption_context(self):
         with open(self.private_key_file, 'rb') as pem_in:
@@ -51,7 +68,7 @@ class ServerHandler():
         
         with open(self.public_key_file, 'rb') as pem_in:
             pemlines = pem_in.read()
-        self.public_key = load_pem_public_key(pemlines)      
+        self.public_key = load_pem_public_key(pemlines) 
 
     def write(self, string):
         print("Recieved the following message from client: ")
@@ -62,20 +79,39 @@ class ServerHandler():
         self.stream.flush()
 
 class TransferSession():
-    def __init__(self, sock, private_key=None, stream=False):
+    def __init__(self, src_ip, sock, handler, private_key=None, stream=False):
         self.data_type = None
         self.serialize_format = None
         self.encrypted = None
         self.transfer_size = None
 
+        self.src_ip = src_ip
         self.sock = sock
+        self.handler = handler
         self.private_key = private_key
 
+        self.print = False
+        self.output_file = None
+        self.output_format = None
         self.payload = bytearray()
 
         # Read the next byte (meta_byte) from the socket only on init
         meta_byte = read_from_socket_upto_target(self.sock, 1)
         self.unpack_meta_byte(meta_byte)
+
+        # Encryption validation
+        if self.encrypted and not self.handler.enable_encryption:
+            raise UnsupportedTransfer("Encryption Disabled")
+        
+        # Data type validation
+        if not self.data_type:
+            raise UnsupportedTransfer("Invalid Data Type specified")
+        
+        # Serialization validation
+        if not self.serialize_format:
+            raise UnsupportedTransfer("Invalid serialization format specified.")
+        elif self.serialize_format == "binary" and not self.handler.pickle_enabled:
+            raise UnsupportedTransfer("Pickling disabled.")
 
         # If the serialize format is not 0 (plaintext) then the file cannot be
         # returned until the whole session is complete
@@ -83,6 +119,28 @@ class TransferSession():
             self.streamable = stream
         else:
             self.streamable = False
+        
+        if self.handler.file_output_format == "original":
+            self.output_format = self.serialize_format
+        else:
+            self.output_format = "json"
+        
+        # Open up streams ready for writing
+        if self.handler.file_output_enabled:
+            file_name = self.handler.file_name_format.format(
+                timestamp=datetime.strftime(datetime.utcnow(), "%Y-%m-%dT%H-%M-%SZ"),
+                source=src_ip,
+                format = self.output_format
+                )
+            file_path = Path(self.handler.file_output_directory) / file_name
+            self.output_file = open(file_path, "wb")
+        if self.handler.print_output_enabled:
+            self.print = True
+    
+    def _close(self):
+        if self.output_file:
+            self.output_file.close()
+        
     
     def decrypt(self,payload):
         try:
@@ -109,7 +167,7 @@ class TransferSession():
 
         serialize_format = extract_bits(meta_byte, 3, 3)
         if serialize_format == 0:
-            self.serialize_format = "plaintext"
+            self.serialize_format = "txt"
         elif serialize_format == 1:
             self.serialize_format = "binary"
         elif serialize_format == 2:
@@ -120,18 +178,30 @@ class TransferSession():
         self.encrypted = (meta_byte >> 1) & 1
     
     def _finalise_payload(self, payload):
-        if self.data_type == "dictionary":
-            deserialized = None
-            if self.serialize_format == 'binary':
-                deserialized = pickle.loads(payload)
-            elif self.serialize_format == 'json':
-                deserialized = json.loads(payload.decode('utf-8'))
-            elif self.serialize_format == 'xml':
-                root = ET.fromstring(payload)
-                deserialized = {child.tag: child.text for child in root}
-            return json.dumps(deserialized, indent=4)
-        else:
-            return payload.decode("utf-8")
+        # Deserialize if file_output_format is not original or if printing to screen
+        if self.handler.file_output_format != "original" or not self.handler.print_output_enabled:
+            if self.data_type == "dictionary":
+                if self.serialize_format == 'binary':
+                    deserialized = pickle.loads(payload)
+                elif self.serialize_format == 'json':
+                    deserialized = json.loads(payload.decode("utf-8"))
+                elif self.serialize_format == 'xml':
+                    root = ET.fromstring(payload)
+                    deserialized = {child.tag: child.text for child in root}
+                if self.handler.file_output_format == "json":
+                    deserialized = json.dumps(deserialized, indent=4)
+            else:
+                deserialized = payload.decode("utf-8")
+        if self.output_file:
+            if self.handler.file_output_format == "original":
+                self.output_file.write(payload)
+            else:
+                self.output_file.write(deserialized.encode("utf-8"))
+        if self.print:
+            print(f"Recieved the following {self.serialize_format} message from {self.src_ip}:")
+            print("---" * 20)
+            print(deserialized)
+            print("---" * 20)
     
     def recieve_upload(self, final):
         # Payload always prefixed with two-bytes indicating size
@@ -141,11 +211,12 @@ class TransferSession():
         if self.encrypted:
             payload = self.decrypt(payload)
         if self.streamable:
-            return self._finalise_payload(payload)
+            self._finalise_payload(payload)
         else:
             self.payload += payload
         if final:
-            return self._finalise_payload(self.payload)
+            self._finalise_payload(self.payload)
+            self._close()
          
 def extract_bits(int_byte, pos, count):
     # Right shift the number by p-1 bits to get the desired bits at the rightmost end of the number
@@ -195,19 +266,17 @@ class ClientThread(Thread):
             if self.init:
                 if self.session:
                     raise DuplicateSession()
-                self.session = TransferSession(self.sock)
+                self.session = TransferSession(self.ip, self.sock, self.handler)
             # Ensure there is an active session before recieving:
             elif not self.session:
                 raise InvalidHeader("Uninitialised session")
             # Recieve the upload if ready (enough to deserialise)
-            payload = self.session.recieve_upload(final=self.final)
-            if payload:
-                handler.write(payload)
+            self.session.recieve_upload(final=self.final)
 
             # Remove the session if this is the final packet.
             if self.final:
-                self.session = None                
-                handler.flush()
+                self.session = None         
+
         elif self.operation_mode == "REQUEST_PUBKEY":
             response = bytearray()
             response += len(self.handler.public_key).to_bytes(2, "big")
@@ -225,22 +294,32 @@ server_mode = "PRINT"
 server_write = "CONTINUOUS"
 # sever_mode = "SAVE"
 
-handler = ServerHandler()
+def main():
+    config = configparser.ConfigParser()
 
-tcpsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-tcpsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-tcpsock.settimeout(30)
-tcpsock.bind((TCP_IP, TCP_PORT))
-threads = []
+    etc_dir = Path(__file__).parent.parent / "etc"
+    default_config_filename = str(etc_dir / "default.ini")
+    active_config_filename = str(etc_dir / "config.ini")
+    config.read((default_config_filename, active_config_filename))
+    print(config.sections())
+    handler = ServerHandler(config)
 
-while True:
-    tcpsock.listen(5)
-    #print "Waiting for incoming connections..."
-    (conn, (ip,port)) = tcpsock.accept()
-    #print 'Got connection from ', (ip,port)
-    newthread = ClientThread(ip,port,conn,handler)
-    newthread.start()
-    threads.append(newthread)
+    tcpsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    tcpsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    #tcpsock.settimeout(30)
+    tcpsock.bind((TCP_IP, TCP_PORT))
+    threads = []
+    while True:
+        tcpsock.listen(5)
+        #print "Waiting for incoming connections..."
+        (conn, (ip,port)) = tcpsock.accept()
+        #print 'Got connection from ', (ip,port)
+        newthread = ClientThread(ip,port,conn,handler)
+        newthread.start()
+        threads.append(newthread)
 
-for t in threads:
-    t.join()
+    for t in threads:
+        t.join()
+    
+if __name__ == "__main__":
+    main()
