@@ -138,7 +138,7 @@ class TransferSession():
         # Open up streams ready for writing
         if self.server_context.file_output_enabled:
             file_name = self.server_context.file_name_format.format(
-                timestamp=datetime.strftime(datetime.utcnow(), "%Y-%m-%dT%H-%M-%SZ"),
+                timestamp=datetime.strftime(datetime.utcnow(), "%Y-%m-%dT%H-%M-%S-%fZ"),
                 source=src_ip,
                 format = self.output_format
                 )

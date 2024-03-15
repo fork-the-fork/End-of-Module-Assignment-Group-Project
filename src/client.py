@@ -95,3 +95,9 @@ if __name__ == "__main__":
     client.open()
     client.send_dictionary(big_dic, "json")
     client.close()
+
+    client = ClientSession()
+    client.open()
+    client.send_dictionary({"ABC": "DEF"}, "xml")
+    client.send_text("Hello World!")
+    client.close()
