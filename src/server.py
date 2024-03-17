@@ -1,14 +1,17 @@
+"""
+This file contains the server-side code.
+"""
+
 import socket
-import sys
-import time
 from datetime import datetime
 from pathlib import Path
 import json
 import pickle
 import xml.etree.ElementTree as ET
 import configparser
-from cryptography.fernet import Fernet
 from threading import Thread
+from cryptography.fernet import Fernet
+
 
 PRINTFORMAT = """
 ===========================================
@@ -42,6 +45,14 @@ TCP_PORT = 6868
 BUFFER_SIZE = 1024
 
 def extract_bits(int_byte, pos, count):
+    """
+    The extract_bits function ...
+
+    :param int_byte:
+	:param pos :
+    :param count:
+    """
+
     # Right shift the number by p-1 bits to get the desired bits at the rightmost end of the number
     shifted_number = int_byte >> 8 - pos - count
 
@@ -51,6 +62,13 @@ def extract_bits(int_byte, pos, count):
     # END
 
 def read_from_socket_upto_target(sock, target):
+    """
+    The read_from_socket_upto_target ...
+
+    :param sock:
+	:param target:
+    """
+
     data = bytearray()
     while target > 0:
         buffer = sock.recv(min(target, BUFFER_SIZE), socket.MSG_WAITALL)
@@ -59,11 +77,19 @@ def read_from_socket_upto_target(sock, target):
     return data
 
 class ServerContext():
+    """
+    This class creates the ServerContext object which..
+    """
     def __init__(self, config):
         self.initialise_server_settings(config)
         self.initialise_encryption_context()
-    
+
     def initialise_server_settings(self, config):
+        """
+        The intialise_server_settings ...
+
+        :param config:
+        """
         # Encryption Settings
         encryption_conf = config["encryption"]
         self.encryption_enabled = encryption_conf.getboolean("enabled")
@@ -82,6 +108,10 @@ class ServerContext():
         self.pickle_enabled = serializtion_conf.getboolean("pickle_enabled")
 
     def initialise_encryption_context(self):
+        """
+        The intialise_encryption_context function ...
+
+        """
         self.symmetric_key = None
         if self.encryption_enabled:
             with open(self.symmetric_key_file, "rb") as key_file:
@@ -89,6 +119,9 @@ class ServerContext():
             self.symmetric_key = Fernet(raw_key)
 
 class TransferSession():
+    """
+    This class creates the TransferSession object which..
+    """
     def __init__(self, src_ip, sock, server_context, private_key=None, stream=False):
         self.data_type = None
         self.serialize_format = None
@@ -112,11 +145,11 @@ class TransferSession():
         # Encryption validation
         if self.encrypted and not self.server_context.encryption_enabled:
             raise UnsupportedTransfer("Encryption Disabled")
-        
+
         # Data type validation
         if not self.data_type:
             raise UnsupportedTransfer("Invalid Data Type specified")
-        
+
         # Serialization validation
         if not self.serialize_format:
             raise UnsupportedTransfer("Invalid serialization format specified.")
@@ -129,12 +162,12 @@ class TransferSession():
             self.streamable = stream
         else:
             self.streamable = False
-        
+
         if self.server_context.file_output_format == "original":
             self.output_format = self.serialize_format
         else:
             self.output_format = "json"
-        
+
         # Open up streams ready for writing
         if self.server_context.file_output_enabled:
             file_name = self.server_context.file_name_format.format(
@@ -146,18 +179,32 @@ class TransferSession():
             self.output_file = open(file_path, "wb")
         if self.server_context.print_output_enabled:
             self.print = True
-    
+
     def close(self):
+        """
+        The close function ...
+
+        """
         if self.output_file:
             self.output_file.close()
-    
+
     def decrypt(self,payload):
+        """
+        The decrypt function ...
+
+        :param payload:
+        """
         try:
             return self.server_context.symmetric_key.decrypt(payload)
         except ValueError:
             raise EncryptionError
 
     def unpack_meta_byte(self, meta_byte):
+        """
+        The unpack_meta_byte function ...
+
+        :param meta_byte:
+        """
         if not isinstance(meta_byte, int):
             meta_byte = int.from_bytes(meta_byte, "big")
         data_type = extract_bits(meta_byte, 0, 3)
@@ -175,12 +222,13 @@ class TransferSession():
             self.serialize_format = "json"
         elif serialize_format == 3:
             self.serialize_format = "xml"
-            
+
         self.encrypted = (meta_byte >> 1) & 1
-    
+
     def _finalise_payload(self, payload):
         # Deserialize if file_output_format is not original or if printing to screen
-        if self.server_context.file_output_format != "original" or self.server_context.print_output_enabled:
+        if self.server_context.file_output_format != "original" \
+            or self.server_context.print_output_enabled:
             if self.data_type == "dictionary":
                 if self.serialize_format == 'binary':
                     deserialized = pickle.loads(payload)
@@ -203,8 +251,13 @@ class TransferSession():
                                      src_ip=self.src_ip,
                                      encrypted=repr(bool(self.encrypted)),
                                      message=deserialized))
-    
+
     def recieve_upload(self, final):
+        """
+        The recieve_upload function ...
+
+        :param final:
+        """
         # Payload always prefixed with two-bytes indicating size
         size_bytes = read_from_socket_upto_target(self.sock, 2)
         self.transfer_size = int.from_bytes(size_bytes,"big")
@@ -220,6 +273,9 @@ class TransferSession():
             self.close()
 
 class ClientThread(Thread):
+    """
+    This class creates the ClientThread object which..
+    """
 
     def __init__(self,ip,port,sock,server_context):
         Thread.__init__(self)
@@ -235,8 +291,13 @@ class ClientThread(Thread):
         self.init = None
         self.final = None
         print(f"Connection initiated by {ip}:{port}.")
-    
+
     def unpack_operation_byte(self, op_byte):
+        """
+        The unpack_operation_byte function ...
+
+        :param op_byte:
+        """
         if not isinstance(op_byte, int):
             op_byte = int.from_bytes(op_byte, "big")
         status = extract_bits(op_byte, 0, 4)
@@ -250,6 +311,9 @@ class ClientThread(Thread):
         self.final = bool((op_byte >> 2) & 1)
 
     def session_controller(self):
+        """
+        The session_controller function ...
+        """
         op_byte = read_from_socket_upto_target(self.sock, 1)
         self.unpack_operation_byte(op_byte)
         if self.operation_mode == "TRANSFER":
@@ -266,7 +330,7 @@ class ClientThread(Thread):
 
             # Remove the session if this is the final packet.
             if self.final:
-                self.session = None  
+                self.session = None
 
         elif self.operation_mode == "END":
             print(f"Connection closed by {self.ip}:{self.port}.")
@@ -286,6 +350,9 @@ class ClientThread(Thread):
                 break
 
 def main():
+    """
+        The main function ..
+        """
     config = configparser.ConfigParser()
 
     etc_dir = Path(__file__).parent.parent / "etc"
@@ -309,6 +376,6 @@ def main():
 
     for t in threads:
         t.join()
-    
+
 if __name__ == "__main__":
     main()

@@ -1,3 +1,7 @@
+"""
+This file contains the client-side code.
+"""
+
 import socket
 import json
 import pickle
@@ -5,23 +9,37 @@ import xml.etree.ElementTree as ET
 from cryptography.fernet import Fernet
 
 messages = ["Hello", "GroupB!"]
-message_count = len(messages)
+MESSAGE_COUNT = len(messages)
 
 class ClientSession():
+    """
+    This class creates the ClientSession object which..
+    """
     def __init__(self, encryption_key_file=None):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         if encryption_key_file:
             self.enable_encryption(encryption_key_file)
         else:
             self.encrypted = False
-    
+
     def enable_encryption(self, key_file_name):
+        """
+        The enable_encryption function ...
+
+        :param key_file_name:
+        """
         self.encrypted = True
         with open(key_file_name, "rb") as key_file:
             raw_key = key_file.read()
         self.encryption_key = Fernet(raw_key)
 
     def open(self, host="127.0.0.1", port=6868):
+         """
+        The open function ...
+
+        :param host: localhost
+        :param port: port the client runs on on the server
+        """
         self.sock.connect((host,port))
 
     def _transfer_raw(self, data_type, serialize_format, payload):
@@ -62,7 +80,7 @@ class ClientSession():
             packet_bytes += len(chunk).to_bytes(2, "big")
             packet_bytes += chunk
             self.sock.send(packet_bytes)
-    
+
     def _serialize_dict(self, data, format):
         if format == 'binary':
             return pickle.dumps(data)
@@ -79,12 +97,12 @@ class ClientSession():
     def send_dictionary(self, dic, encoding):
         payload = self._serialize_dict(dic, encoding)
         self._transfer_raw("dictionary", encoding, payload)
-    
+
     def send_text(self, msg):
         if not isinstance(msg, (bytes, bytearray)):
             msg = msg.encode("utf-8")
         self._transfer_raw("text", "plaintext", msg)
-    
+
     def close(self):
         close_session_bytes = (1 << 4).to_bytes(1,"big")
         self.sock.send(close_session_bytes)
