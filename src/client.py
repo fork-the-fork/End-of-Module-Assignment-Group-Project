@@ -75,6 +75,7 @@ class ClientSession():
             payload: The payload to be transmitted.
         """
         # First payload must contain the meta_byte
+        print(f"Sending {data_type} as {serialize_format} (encrypted: {bool(self.encrypted)}).")
         try:
             data_type = TransferSession.DATA_TYPE_NAME_LOOKUP[data_type]
             serialize_format = TransferSession.SERIALIZE_FMT_NAME_LOOKUP[serialize_format]
@@ -103,6 +104,7 @@ class ClientSession():
             packet_bytes += len(chunk).to_bytes(2, "big")
             packet_bytes += chunk
             self.sock.send(packet_bytes)
+        print(self.sock.recv(4096).decode("utf-8"))
 
     def _serialize_dict(self, data: dict, serialize_format: str) -> bytes:
         """
@@ -173,7 +175,8 @@ class ClientSession():
         """
         close_session_bytes = (1 << 4).to_bytes(1,"big")
         self.sock.send(close_session_bytes)
-        self.sock.shutdown(2)
+        self.sock.shutdown(socket.SHUT_WR)
+        self.sock.close()
 
 def main():
     """

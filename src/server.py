@@ -378,6 +378,22 @@ class ClientThread(Thread):
         self.final = None
         print(f"Connection initiated by {ip}:{port}.")
 
+    def send_message(self, message: Union[str, bytes]) -> None:
+        """
+        Best effort to send a message to the client, however, fails silently.
+        This is intentional to prevent interrupts to ongoing file transfers.
+
+        Args:
+            message: The operation_byte as integer or bytes object.
+
+        """
+        if isinstance(message, str):
+            message = message.encode("utf-8")
+        try:
+            self.sock.send(message)
+        except socket.error:
+            pass
+
     def unpack_operation_byte(self, op_byte: Union[int, bytes]) -> None:
         """
         Parses the operation byte into the client instructions.
@@ -426,6 +442,7 @@ class ClientThread(Thread):
 
             # Remove the session if this is the final packet.
             if self.final:
+                self.send_message("OK")
                 self.session = None
 
         elif self.operation_mode == "END":
@@ -448,9 +465,14 @@ class ClientThread(Thread):
             try:
                 if self.session_controller() > 0:
                     break
-            except SessionException as e:
-                print(f"Transfer issue occured from {self.ip}: {repr(e)}")
-                break
+            except Exception as exc: # pylint: disable=broad-exception-caught
+                print(f"Issue occured with {self.ip}: {repr(exc)}")
+                if isinstance(exc, socket.error):
+                    # Socket has died, close thread.
+                    break
+                # If the issue was caused by the client, reply with the error details.
+                if isinstance(exc, SessionException):
+                    self.send_message(f"ERROR: {repr(exc)}")
 
 def main() -> None:
     """
@@ -475,7 +497,7 @@ def main() -> None:
     while True:
         (conn, (ip,port)) = tcpsock.accept()
         conn.settimeout(CLIENT_TIMEOUT)
-        newthread = ClientThread(ip,port,conn,server_context)
+        newthread = ClientThread(ip, port, conn, server_context)
         newthread.start()
         threads.append(newthread)
 
