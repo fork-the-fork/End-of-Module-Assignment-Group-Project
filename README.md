@@ -87,6 +87,7 @@ enabled = # Does the server support encryption
 symmetric_key_file = # Where is the symmetric key for encryption
 
 [output]
+stream_output = # If the file spans multiple packets, should it be streamed in chunks or in one go
 file_output_enabled = # Does the server output to a file
 file_output_format = # File output format "original" or "json"
 file_output_directory = # Directory to output files to
