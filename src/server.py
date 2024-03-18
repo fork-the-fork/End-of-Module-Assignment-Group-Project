@@ -41,13 +41,17 @@ class UnsupportedTransfer(SessionException):
 class EncryptionError(SessionException):
     """An encryption error occured."""
 
-def extract_bits(int_byte, pos, count):
+def extract_bits(int_byte: int, pos: int, count: int) -> int:
     """
-    The extract_bits function ...
+    Bit shifts the supplied int_byte to read {count} bits from position {pos}:
+    e.g. Reading 4-bits from pos 1 of (01110100) would be 14 (00001110).
+    Args:
+        int_byte: the byte to read in integer format.
+        pos: the bit-position to start reading (zero-based)
+        count: the number of bits to count
 
-    :param int_byte:
-	:param pos :
-    :param count:
+    Returns:
+        The integer value of the shifted int_byte.
     """
 
     # Right shift the number by p-1 bits to get the desired bits at the rightmost end of the number
@@ -58,69 +62,70 @@ def extract_bits(int_byte, pos, count):
     return shifted_number & mask
     # END
 
-def read_from_socket_upto_target(sock, target):
+def read_from_socket_upto_target(sock: socket.socket, target_size: int) -> bytearray:
     """
-    The read_from_socket_upto_target ...
+    Reads the exact number of target bytes from the specified socket.
+    Using the BUFFER_SIZE. This function is blocking.
+    Args:
+        sock: the socket to read data from.
+        target_size: the number of bytes to read from the socket.
 
-    :param sock:
-	:param target:
+    Returns:
+        A bytearray of data from the socket.
     """
 
     data = bytearray()
-    while target > 0:
-        buffer = sock.recv(min(target, BUFFER_SIZE), socket.MSG_WAITALL)
+    while target_size > 0:
+        buffer = sock.recv(min(target_size, BUFFER_SIZE), socket.MSG_WAITALL)
         data += buffer
-        target -= len(buffer)
+        target_size -= len(buffer)
     return data
 
-class ServerContext():
+def initialize_server_context(config: configparser.ConfigParser) -> dict:
     """
-    This class creates the ServerContext object which..
+    Initializes the server settings to meet the directive of the specified config file.
+    This includes the configuration and encryption settings.
+    Args:
+        config: The final, parsed config.
+
+    Returns:
+        A dictionary containing the sever context (configuration and common files)
     """
-    def __init__(self, config):
-        self.initialise_server_settings(config)
-        self.initialise_encryption_context()
+    server_context = {}
 
-    def initialise_server_settings(self, config):
-        """
-        The intialise_server_settings ...
+    # Listening settings
+    listening_conf = config["listening"]
+    server_context["tcp_host"] = listening_conf["host"]
+    server_context["tcp_port"] = listening_conf.getint("port")
 
-        :param config:
-        """
-        # Listening settings
-        listening_conf = config["listening"]
-        self.tcp_host = listening_conf["host"]
-        self.tcp_port = listening_conf.getint("port")
+    # Encryption Settings
+    encryption_conf = config["encryption"]
+    server_context["encryption_enabled"] = encryption_conf.getboolean("enabled")
+    symmetric_key_file_name = encryption_conf["symmetric_key_file"]
+    server_context["symmetric_key_file"] = paths.expand_path(symmetric_key_file_name)
 
-        # Encryption Settings
-        encryption_conf = config["encryption"]
-        self.encryption_enabled = encryption_conf.getboolean("enabled")
-        symmetric_key_file_name = encryption_conf["symmetric_key_file"]
-        self.symmetric_key_file = paths.expand_path(symmetric_key_file_name)
+    # Server Output Settings
+    output_conf = config["output"]
+    server_context["file_output_enabled"] =output_conf.getboolean("file_output_enabled")
+    file_output_directory_name = output_conf["file_output_directory"]
+    server_context["file_output_directory"] = paths.expand_path(file_output_directory_name)
+    server_context["dictionary_output_format"] = output_conf["dictionary_output_format"]
+    server_context["file_name_format"] = output_conf["file_name_format"]
+    server_context["print_output_enabled"] = output_conf.getboolean("print_output_enabled")
 
-        # Server Output Settings
-        output_conf = config["output"]
-        self.file_output_enabled = output_conf.getboolean("file_output_enabled")
-        file_output_directory_name = output_conf["file_output_directory"]
-        self.file_output_directory = paths.expand_path(file_output_directory_name)
-        self.dictionary_output_format = output_conf["dictionary_output_format"]
-        self.file_name_format = output_conf["file_name_format"]
-        self.print_output_enabled = output_conf.getboolean("print_output_enabled")
+    # Serialization Settings
+    serializtion_conf = config["serialization"]
+    server_context["pickle_enabled"] = serializtion_conf.getboolean("pickle_enabled")
 
-        # Serialization Settings
-        serializtion_conf = config["serialization"]
-        self.pickle_enabled = serializtion_conf.getboolean("pickle_enabled")
+    # If required, load the encryption key
+    symmetric_key = None
+    if server_context["encryption_enabled"]:
+        with open(server_context["symmetric_key_file"], "rb") as key_file:
+            raw_key = key_file.read()
+        symmetric_key = Fernet(raw_key)
+    server_context["symmetric_key"] = symmetric_key
 
-    def initialise_encryption_context(self):
-        """
-        The intialise_encryption_context function ...
-
-        """
-        self.symmetric_key = None
-        if self.encryption_enabled:
-            with open(self.symmetric_key_file, "rb") as key_file:
-                raw_key = key_file.read()
-            self.symmetric_key = Fernet(raw_key)
+    return server_context
 
 class TransferSession():
     """
@@ -147,7 +152,7 @@ class TransferSession():
         self.unpack_meta_byte(meta_byte)
 
         # Encryption validation
-        if self.encrypted and not self.server_context.encryption_enabled:
+        if self.encrypted and not self.server_context["encryption_enabled"]:
             raise UnsupportedTransfer("Encryption Disabled")
 
         # Data type validation
@@ -157,7 +162,7 @@ class TransferSession():
         # Serialization validation
         if not self.serialize_format:
             raise UnsupportedTransfer("Invalid serialization format specified.")
-        elif self.serialize_format == "binary" and not self.server_context.pickle_enabled:
+        elif self.serialize_format == "binary" and not self.server_context["pickle_enabled"]:
             raise UnsupportedTransfer("Pickling disabled.")
 
         # If the serialize format is not 0 (plaintext) then the file cannot be
@@ -171,19 +176,19 @@ class TransferSession():
         # is set to json.
         self.output_format = self.serialize_format
         if (self.data_type == "dictionary" and
-            self.server_context.dictionary_output_format == "json"):
+            self.server_context["dictionary_output_format"] == "json"):
             self.output_format = "json"
 
         # Open up streams ready for writing
-        if self.server_context.file_output_enabled:
-            file_name = self.server_context.file_name_format.format(
+        if self.server_context["file_output_enabled"]:
+            file_name = self.server_context["file_name_format"].format(
                 timestamp=datetime.strftime(datetime.utcnow(), "%Y-%m-%dT%H-%M-%S-%fZ"),
                 source=src_ip,
                 format = self.output_format
                 )
-            file_path = self.server_context.file_output_directory / file_name
+            file_path = self.server_context["file_output_directory"] / file_name
             self.output_file = open(file_path, "wb")
-        if self.server_context.print_output_enabled:
+        if self.server_context["print_output_enabled"]:
             self.print = True
 
     def close(self):
@@ -201,7 +206,7 @@ class TransferSession():
         :param payload:
         """
         try:
-            return self.server_context.symmetric_key.decrypt(payload)
+            return self.server_context["symmetric_key"].decrypt(payload)
         except ValueError:
             raise EncryptionError
 
@@ -233,8 +238,8 @@ class TransferSession():
 
     def _finalise_payload(self, payload):
         # Deserialize if dictionary_output_format is not original or if printing to screen
-        if (self.server_context.dictionary_output_format != "original" or
-            self.server_context.print_output_enabled):
+        if (self.server_context["dictionary_output_format"] != "original" or
+            self.server_context["print_output_enabled"]):
             if self.data_type == "dictionary":
                 if self.serialize_format == 'binary':
                     deserialized = pickle.loads(payload)
@@ -243,12 +248,12 @@ class TransferSession():
                 elif self.serialize_format == 'xml':
                     root = ET.fromstring(payload)
                     deserialized = {child.tag: child.text for child in root}
-                if self.server_context.dictionary_output_format == "json":
+                if self.server_context["dictionary_output_format"] == "json":
                     deserialized = json.dumps(deserialized, indent=4)
             else:
                 deserialized = payload.decode("utf-8")
         if self.output_file:
-            if self.server_context.dictionary_output_format == "original":
+            if self.server_context["dictionary_output_format"] == "original":
                 self.output_file.write(payload)
             else:
                 self.output_file.write(deserialized.encode("utf-8"))
@@ -365,12 +370,12 @@ def main():
     default_config_filename = str(etc_dir / "default.ini")
     active_config_filename = str(etc_dir / "config.ini")
     config.read((default_config_filename, active_config_filename))
-    server_context = ServerContext(config)
+    server_context = initialize_server_context(config)
 
     tcpsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     tcpsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     #tcpsock.settimeout(30)
-    tcpsock.bind((server_context.tcp_host, server_context.tcp_port))
+    tcpsock.bind((server_context["tcp_host"], server_context["tcp_port"]))
     print("Server started.")
     threads = []
     while True:

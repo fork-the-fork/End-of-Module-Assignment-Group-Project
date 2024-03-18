@@ -67,11 +67,10 @@ The client and server use a bespoke application layer protcol to communicate. Th
 **Payload**
 * Pre-fixed with a two-byte big-endian integer.
 
-
 ### Unit test
 to be updated.
 
-### license
+### License
 Distributed under the MIT License. See LICENSE.txt for more information.
 
 ### Instructions:
