@@ -6,6 +6,7 @@ import unittest
 
 from server import extract_bits, initialize_server_context
 from client import ClientSession
+import client
 import subprocess
 import os
 from utils import paths
@@ -74,6 +75,9 @@ class ServerConfiguration(unittest.TestCase):
         self.assertIsInstance(parsed_config["symmetric_key"], cryptography.fernet.Fernet)
 
 class ClientServerFunctions(unittest.TestCase):
+    """
+    Testing file transfers and encyrption functionality for client interacting with server.
+    """
     def setUp(self):
         # Start the server as a non-blocking process
         server_py = str(paths.expand_path("./src/server.py").absolute())
@@ -91,9 +95,9 @@ class ClientServerFunctions(unittest.TestCase):
     
     def _determine_directory_growth(self, func, *args, **kwargs):
         before = len(os.listdir(self.output_file_directory))
-        func(*args, **kwargs)
+        resp = func(*args, **kwargs)
         after = len(os.listdir(self.output_file_directory))
-        return after - before
+        return resp, (after - before)
     
     def test_connect_to_server(self):
         self.client.open()
@@ -106,27 +110,99 @@ class ClientServerFunctions(unittest.TestCase):
     
     def test_encryption_explicit(self):
         self.client.open()
-        self.client.enable_encryption(paths.expand_path("./etc/secret/example.key"))
+        self.client.enable_encryption("./etc/secret/example.key")
         self.client.close()
     
     def test_large_dictionary_transfer_xml(self):
         self.client.open()
-        growth = self._determine_directory_growth(self.client.send_dictionary, {f"A{i}": str(i+1) for i in range(3000)}, "xml")
+        resp, growth = self._determine_directory_growth(self.client.send_dictionary, {f"A{i}": str(i+1) for i in range(10000)}, "xml")
         self.assertGreater(growth, 0)
+        self.assertEqual(resp, 0)
         self.client.close()
 
     def test_large_dictionary_transfer_json(self):
         self.client.open()
-        growth = self._determine_directory_growth(self.client.send_dictionary, {f"A{i}": str(i+1) for i in range(3000)}, "json")
+        resp, growth = self._determine_directory_growth(self.client.send_dictionary, {f"A{i}": str(i+1) for i in range(10000)}, "json")
         self.assertGreater(growth, 0)
+        self.assertEqual(resp, 0)
         self.client.close()
     
     def test_large_dictionary_transfer_binary(self):
         self.client.open()
-        growth = self._determine_directory_growth(self.client.send_dictionary, {f"A{i}": str(i+1) for i in range(3000)}, "binary")
+        resp, growth = self._determine_directory_growth(self.client.send_dictionary, {f"A{i}": str(i+1) for i in range(10000)}, "binary")
         self.assertGreater(growth, 0)
+        self.assertEqual(resp, 0)
         self.client.close()
 
+    def test_small_dictionary_transfer_xml(self):
+        self.client.open()
+        resp, growth = self._determine_directory_growth(self.client.send_dictionary, {f"A{i}": str(i+1) for i in range(2)}, "xml")
+        self.assertGreater(growth, 0)
+        self.assertEqual(resp, 0)
+        self.client.close()
+
+    def test_small_dictionary_transfer_json(self):
+        self.client.open()
+        resp, growth = self._determine_directory_growth(self.client.send_dictionary, {f"A{i}": str(i+1) for i in range(2)}, "json")
+        self.assertGreater(growth, 0)
+        self.assertEqual(resp, 0)
+        self.client.close()
+    
+    def test_small_dictionary_transfer_binary(self):
+        self.client.open()
+        resp, growth = self._determine_directory_growth(self.client.send_dictionary, {f"A{i}": str(i+1) for i in range(2)}, "binary")
+        self.assertGreater(growth, 0)
+        self.assertEqual(resp, 0)
+        self.client.close()
+    
+    def test_large_text_message_transfer_unencrypted(self):
+        self.client.open()
+        resp, growth = self._determine_directory_growth(self.client.send_text, "Hello " * 10000)
+        self.assertGreater(growth, 0)
+        self.assertEqual(resp, 0)
+        self.client.close()
+    
+    def test_small_text_message_transfer_unencrypted(self):
+        self.client.open()
+        resp, growth = self._determine_directory_growth(self.client.send_text, "Howdy " * 5)
+        self.assertGreater(growth, 0)
+        self.assertEqual(resp, 0)
+        self.client.close()
+
+    def test_large_text_message_transfer_encrypted(self):
+        self.client.open()
+        self.client.enable_encryption("./etc/secret/example.key")
+        resp, growth = self._determine_directory_growth(self.client.send_text, "Hola " * 10000)
+        self.assertGreater(growth, 0)
+        self.assertEqual(resp, 0)
+        self.client.close()
+
+    def test_small_text_message_transfer_encrypted(self):
+        self.client.open()
+        self.client.enable_encryption("./etc/secret/example.key")
+        resp, growth = self._determine_directory_growth(self.client.send_text, "Hi " * 10)
+        self.assertGreater(growth, 0)
+        self.assertEqual(resp, 0)
+        self.client.close()
+    
+    def test_text_file_transfer_unencrypted(self):
+        self.client.open()
+        self.client.send_text_file("./.gitignore")
+        self.client.close()
+    
+    def test_text_file_transfer_encrypted(self):
+        self.client.open()
+        self.client.enable_encryption("./etc/secret/example.key")
+        self.client.send_text_file("./.gitignore")
+        self.client.close()
+
+    def test_client_demo(self):
+        resp, growth = self._determine_directory_growth(client.main)
+        self.assertEqual(growth, 6)
+    
+    def test_client_open_close(self):
+        self.client.open()
+        self.client.close()
 
 if __name__=="__main__":
     unittest.main()
