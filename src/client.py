@@ -7,14 +7,16 @@ import json
 import pickle
 import xml.etree.ElementTree as ET
 from cryptography.fernet import Fernet
-import utils.paths as paths
+from utils import paths
+from server import TransferSession
 from pathlib import Path
 from typing import Union
 
 class ClientSession():
     """
     This class implements the ClientSession object which tracks a particular client session.
-    The client session object can be used to open/close a session and send multiple files of varying types.
+    The client session object can be used to open/close a session
+    and send multiple files of varying types.
 
     Instance Attributes:
         sock: The client socket to connect to the server.
@@ -73,21 +75,13 @@ class ClientSession():
             payload: The payload to be transmitted.
         """
         # First payload must contain the meta_byte
-        if data_type == "text":
-            data_type_int = 0
-        elif data_type == "dictionary":
-            data_type_int = 1
+        try:
+            data_type = TransferSession.DATA_TYPE_NAME_LOOKUP[data_type]
+            serialize_format = TransferSession.SERIALIZE_FMT_NAME_LOOKUP[serialize_format]
+        except KeyError as exc:
+            raise ValueError("data_type or serialize_format not supported.") from exc
 
-        if serialize_format == "plaintext":
-            serialize_format_int = 0
-        elif serialize_format == "binary":
-            serialize_format_int = 1
-        elif serialize_format == "json":
-            serialize_format_int = 2
-        elif serialize_format == "xml":
-            serialize_format_int = 3
-
-        meta_int = data_type_int << 5 | serialize_format_int << 2 | int(self.encrypted) << 1
+        meta_int = data_type << 5 | serialize_format << 2 | int(self.encrypted) << 1
         meta_byte = meta_int.to_bytes(1, "big")
 
         payload_steps = range(0,len(payload),65535)
@@ -110,7 +104,7 @@ class ClientSession():
             packet_bytes += chunk
             self.sock.send(packet_bytes)
 
-    def _serialize_dict(self, data: dict, format: str) -> bytes:
+    def _serialize_dict(self, data: dict, serialize_format: str) -> bytes:
         """
         serializes a dictionary using the specified format.
         Not intended to be called externally.
@@ -122,17 +116,19 @@ class ClientSession():
         Returns:
             Bytes object containing serialized dictionary.
         """
-        if format == 'binary':
+        if serialize_format == 'binary':
             return pickle.dumps(data)
-        elif format == 'json':
+        if serialize_format == 'json':
             return json.dumps(data).encode('utf-8')
-        elif format == 'xml':
+        if serialize_format == 'xml':
             root = ET.Element('root')
             for key, value in data.items():
                 child = ET.Element(key)
                 child.text = str(value)
                 root.append(child)
             return ET.tostring(root)
+        else:
+            raise NotImplementedError("Serialize format not supported.")
 
     def send_dictionary(self, dic: dict, serialize_format: str) -> None:
         """
@@ -143,7 +139,7 @@ class ClientSession():
             serialize_format: The format to serialize the dictionary with.
         """
         if serialize_format not in ("binary", "json", "xml"):
-            raise NotImplemented("Unsupported serialization format.")
+            raise NotImplementedError("Unsupported serialization format.")
         payload = self._serialize_dict(dic, serialize_format)
         self._transfer_raw("dictionary", serialize_format, payload)
 
@@ -156,8 +152,8 @@ class ClientSession():
         """
         if not isinstance(msg, (bytes, bytearray)):
             msg = msg.encode("utf-8")
-        self._transfer_raw("text", "plaintext", msg)
-    
+        self._transfer_raw("text", "txt", msg)
+
     def send_text_file(self, file_name: str) -> None:
         """
         Wrapper for send_text to send a text message from a file.
@@ -189,7 +185,7 @@ def main():
     # Send a large dictionary with XML.
     big_dictionary = {"A" + str(i): str(i+1) for i in range(0 , 10000)}
     client.send_dictionary(big_dictionary, "xml")
-    
+
     # Send a nested dictionary with JSON.
     client.send_dictionary({"a": {"b": {"d": {"e": {"f": "g"}}}}}, "json")
 
