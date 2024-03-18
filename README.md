@@ -67,11 +67,10 @@ The client and server use a bespoke application layer protcol to communicate. Th
 **Payload**
 * Pre-fixed with a two-byte big-endian integer.
 
-
 ### Unit test
 to be updated.
 
-### license
+### License
 Distributed under the MIT License. See LICENSE.txt for more information.
 
 ### Instructions:
@@ -79,6 +78,10 @@ Distributed under the MIT License. See LICENSE.txt for more information.
 #### Running the Server
 ```bash
 # Update the config.ini file in ./etc
+[listening]
+host = # IP/Host to bind the server to
+port = # TCP port to bind the server to
+
 [encryption]
 enabled = # Does the server support encryption
 symmetric_key_file = # Where is the symmetric key for encryption
@@ -95,6 +98,7 @@ pickle_enabled = # Is pickled enabled? Disabled by default as it presents a secu
 ```
 
 ```bash
+# Start the server
 python server.py
 ```
 

@@ -11,8 +11,10 @@ import xml.etree.ElementTree as ET
 import configparser
 from threading import Thread
 from cryptography.fernet import Fernet
+from typing import Union
 
 BUFFER_SIZE = 1024
+CLIENT_TIMEOUT = 30
 
 PRINTFORMAT = """
 ===========================================
@@ -41,105 +43,145 @@ class UnsupportedTransfer(SessionException):
 class EncryptionError(SessionException):
     """An encryption error occured."""
 
-def extract_bits(int_byte, pos, count):
+def extract_bits(int_byte: int, pos: int, count: int) -> int:
     """
-    The extract_bits function ...
+    Bit shifts the supplied int_byte to read {count} bits from position {pos}:
+    e.g. Reading 4-bits from pos 1 of (01110100) would be 14 (00001110).
+    Args:
+        int_byte: the byte to read in integer format.
+        pos: the bit-position to start reading (zero-based)
+        count: the number of bits to count
 
-    :param int_byte:
-	:param pos :
-    :param count:
+    Returns:
+        The integer value of the shifted int_byte.
     """
 
-    # Right shift the number by p-1 bits to get the desired bits at the rightmost end of the number
+    # Right shift the number to get desired bits at the rightmost end of the number
     shifted_number = int_byte >> 8 - pos - count
 
-    # Mask the rightmost k bits to get rid of any additional bits on the left
+    # Mask the desired rightmost bits to get rid of any additional bits on the left
     mask = (1 << count) - 1
     return shifted_number & mask
-    # END
 
-def read_from_socket_upto_target(sock, target):
+def read_from_socket_upto_target(sock: socket.socket, target_size: int) -> bytearray:
     """
-    The read_from_socket_upto_target ...
+    Reads the exact number of target bytes from the specified socket.
+    Using the BUFFER_SIZE. This function is blocking.
+    Args:
+        sock: the socket to read data from.
+        target_size: the number of bytes to read from the socket.
 
-    :param sock:
-	:param target:
+    Returns:
+        A bytearray of data from the socket.
     """
 
     data = bytearray()
-    while target > 0:
-        buffer = sock.recv(min(target, BUFFER_SIZE), socket.MSG_WAITALL)
+    while target_size > 0:
+        buffer = sock.recv(min(target_size, BUFFER_SIZE), socket.MSG_WAITALL)
         data += buffer
-        target -= len(buffer)
+        target_size -= len(buffer)
     return data
 
-class ServerContext():
+def initialize_server_context(config: configparser.ConfigParser) -> dict:
     """
-    This class creates the ServerContext object which..
+    Initializes the server settings to meet the directive of the specified config file.
+    This includes the configuration and encryption settings.
+    Args:
+        config: The merged final ini config.
+
+    Returns:
+        A dictionary containing the sever context (configuration and common files loaded).
     """
-    def __init__(self, config):
-        self.initialise_server_settings(config)
-        self.initialise_encryption_context()
+    server_context = {}
 
-    def initialise_server_settings(self, config):
-        """
-        The intialise_server_settings ...
+    # Listening settings
+    listening_conf = config["listening"]
+    server_context["tcp_host"] = listening_conf["host"]
+    server_context["tcp_port"] = listening_conf.getint("port")
 
-        :param config:
-        """
-        # Listening settings
-        listening_conf = config["listening"]
-        self.tcp_host = listening_conf["host"]
-        self.tcp_port = listening_conf.getint("port")
+    # Encryption Settings
+    encryption_conf = config["encryption"]
+    server_context["encryption_enabled"] = encryption_conf.getboolean("enabled")
+    symmetric_key_file_name = encryption_conf["symmetric_key_file"]
+    server_context["symmetric_key_file"] = paths.expand_path(symmetric_key_file_name)
 
-        # Encryption Settings
-        encryption_conf = config["encryption"]
-        self.encryption_enabled = encryption_conf.getboolean("enabled")
-        symmetric_key_file_name = encryption_conf["symmetric_key_file"]
-        self.symmetric_key_file = paths.expand_path(symmetric_key_file_name)
+    # Server Output Settings
+    output_conf = config["output"]
+    server_context["stream_output"] = output_conf.getboolean("stream_output")
+    server_context["file_output_enabled"] = output_conf.getboolean("file_output_enabled")
+    file_output_directory_name = output_conf["file_output_directory"]
+    server_context["file_output_directory"] = paths.expand_path(file_output_directory_name)
+    server_context["dictionary_output_format"] = output_conf["dictionary_output_format"]
+    server_context["file_name_format"] = output_conf["file_name_format"]
+    server_context["print_output_enabled"] = output_conf.getboolean("print_output_enabled")
 
-        # Server Output Settings
-        output_conf = config["output"]
-        self.file_output_enabled = output_conf.getboolean("file_output_enabled")
-        file_output_directory_name = output_conf["file_output_directory"]
-        self.file_output_directory = paths.expand_path(file_output_directory_name)
-        self.dictionary_output_format = output_conf["dictionary_output_format"]
-        self.file_name_format = output_conf["file_name_format"]
-        self.print_output_enabled = output_conf.getboolean("print_output_enabled")
+    # Serialization Settings
+    serializtion_conf = config["serialization"]
+    server_context["pickle_enabled"] = serializtion_conf.getboolean("pickle_enabled")
 
-        # Serialization Settings
-        serializtion_conf = config["serialization"]
-        self.pickle_enabled = serializtion_conf.getboolean("pickle_enabled")
+    # If required, load the encryption key
+    symmetric_key = None
+    if server_context["encryption_enabled"]:
+        with open(server_context["symmetric_key_file"], "rb") as key_file:
+            raw_key = key_file.read()
+        symmetric_key = Fernet(raw_key)
+    server_context["symmetric_key"] = symmetric_key
 
-    def initialise_encryption_context(self):
-        """
-        The intialise_encryption_context function ...
-
-        """
-        self.symmetric_key = None
-        if self.encryption_enabled:
-            with open(self.symmetric_key_file, "rb") as key_file:
-                raw_key = key_file.read()
-            self.symmetric_key = Fernet(raw_key)
+    return server_context
 
 class TransferSession():
     """
-    This class creates the TransferSession object which..
-    """
-    def __init__(self, src_ip, sock, server_context, private_key=None, stream=False):
-        self.data_type = None
-        self.serialize_format = None
-        self.encrypted = None
-        self.transfer_size = None
+    The TransferSession object represents a single instance of a file transfer.
+    There is one TransferSession per file.
+    It tracks the state of the transfer and the metadata of the file being transfered.
+    A single packet/payload supports upto a maximum number of bytes, therefore,
+    serialized payloads such as pickled dictionaries need to be stored in the payload attribute.
+    and deserialized at the end. Unlike text files which can be outputted in chunks (streamable).
 
-        self.src_ip = src_ip
+    Class Attributes:
+        DATA_TYPE_LOOKUP: Lookup for the data_type integer value
+        SERIALIZE_FORMAT_LOOKUP: Lookup for the serialization format integer value
+    
+    Instance Attributes:
+        meta_data: Stores the meta_data of the file being transferred.
+        sock: The socket where the file is being transferred from.
+        server_context: A dictionary containing the common server configuration.
+        streamable: Whether or not the file can be streamed (written in chunks per packet)
+        output_file: An open file io stream to write the transferred file to.
+        payload: A bytearray containing the transferred payload (Used for payloads spanning multiple packets).
+    """
+    DATA_TYPE_LOOKUP = {0: "text",
+                        1: "dictionary"}
+    
+    SERIALIZE_FORMAT_LOOKUP = {0: "txt",
+                               1: "binary",
+                               2: "json",
+                               3: "xml"}
+
+    def __init__(self, sock: socket.socket, src_ip: str, server_context: dict) -> None:
+        """
+        Initializes the TransferSession.
+        The first byte on the socket is the meta_byte containing the details of the transfer.
+        This meta_byte is ingested and parsed and the transfer session is initalised by
+        combining context from the meta_byte and the server_context.
+
+        Args:
+            sock: The socket to transfer from.
+            src_ip: The source ip that initiated the session.
+            server_context: A dictionary containing the common server configuration.
+        """
+        self.meta_data = {"data_type": None,
+                          "serialize_format": None,
+                          "encrypted": None,
+                          "transfer_size": None,
+                          "src_ip": src_ip,
+                          "output_format": None}
+
         self.sock = sock
         self.server_context = server_context
-        self.private_key = private_key
 
-        self.print = False
+        self.streamable = False
         self.output_file = None
-        self.output_format = None
         self.payload = bytearray()
 
         # Read the next byte (meta_byte) from the socket only on init
@@ -147,178 +189,219 @@ class TransferSession():
         self.unpack_meta_byte(meta_byte)
 
         # Encryption validation
-        if self.encrypted and not self.server_context.encryption_enabled:
+        if self.meta_data["encrypted"] and not self.server_context["encryption_enabled"]:
             raise UnsupportedTransfer("Encryption Disabled")
 
         # Data type validation
-        if not self.data_type:
+        if not self.meta_data["data_type"]:
             raise UnsupportedTransfer("Invalid Data Type specified")
 
         # Serialization validation
-        if not self.serialize_format:
+        if not self.meta_data["serialize_format"]:
             raise UnsupportedTransfer("Invalid serialization format specified.")
-        elif self.serialize_format == "binary" and not self.server_context.pickle_enabled:
+        elif self.meta_data["serialize_format"] == "binary" and not self.server_context["pickle_enabled"]:
             raise UnsupportedTransfer("Pickling disabled.")
 
-        # If the serialize format is not 0 (plaintext) then the file cannot be
-        # returned until the whole session is complete
-        if self.serialize_format == 0:
-            self.streamable = stream
-        else:
-            self.streamable = False
+        # If the serialize format is not 0 (plaintext) then the file is not streamable
+        # (e.g. it cannot be returned until the whole session is complete)
+        if self.meta_data["serialize_format"] == "txt":
+            self.streamable = self.server_context["stream_output"]
 
         # Output in original format unless file is a dictionary and output mode
         # is set to json.
-        self.output_format = self.serialize_format
-        if (self.data_type == "dictionary" and
-            self.server_context.dictionary_output_format == "json"):
-            self.output_format = "json"
+        self.meta_data["output_format"] = self.meta_data["serialize_format"]
+        if (self.meta_data["data_type"] == "dictionary" and
+            self.server_context["dictionary_output_format"] == "json"):
+            self.meta_data["output_format"] = "json"
 
         # Open up streams ready for writing
-        if self.server_context.file_output_enabled:
-            file_name = self.server_context.file_name_format.format(
+        if self.server_context["file_output_enabled"]:
+            file_name = self.server_context["file_name_format"].format(
                 timestamp=datetime.strftime(datetime.utcnow(), "%Y-%m-%dT%H-%M-%S-%fZ"),
-                source=src_ip,
-                format = self.output_format
+                source=self.meta_data["src_ip"],
+                format = self.meta_data["output_format"]
                 )
-            file_path = self.server_context.file_output_directory / file_name
+            file_path = self.server_context["file_output_directory"] / file_name
             self.output_file = open(file_path, "wb")
-        if self.server_context.print_output_enabled:
-            self.print = True
 
     def close(self):
         """
-        The close function ...
-
+        Closes any open file output IOs.
         """
         if self.output_file:
             self.output_file.close()
+            self.output_file = None
 
-    def decrypt(self,payload):
+    def decrypt(self,payload: bytes) -> bytes:
         """
-        The decrypt function ...
+        Decrypts the encrypted payload using context provided by the server_context settings.
 
-        :param payload:
+        Args:
+            payload: The encrypted payload.
+
+        Returns:
+            The decrypted payload.
         """
         try:
-            return self.server_context.symmetric_key.decrypt(payload)
+            return self.server_context["symmetric_key"].decrypt(bytes(payload))
         except ValueError:
             raise EncryptionError
 
-    def unpack_meta_byte(self, meta_byte):
+    def unpack_meta_byte(self, meta_byte: Union[bytes, int]) -> None:
         """
-        The unpack_meta_byte function ...
+        Unpacks the meta_byte into the self.meta_data attribute using the class lookups.
+        The meta_byte contains the context about the transferred file including:
+            data_type: What type of data is in the payload (text or dictionary).
+            serialize_type: How the data is serialized.
+            encrypted: Whether the payload is encrypted.
 
-        :param meta_byte:
+        Args:
+            meta_byte: The meta_byte specified as a byte or integer.
         """
         if not isinstance(meta_byte, int):
             meta_byte = int.from_bytes(meta_byte, "big")
-        data_type = extract_bits(meta_byte, 0, 3)
-        if data_type == 0:
-            self.data_type = "text"
-        elif data_type == 1:
-            self.data_type = "dictionary"
+        
+        # Extract data_type from bits 0 - 2
+        data_type_int = extract_bits(meta_byte, 0, 3)
+        self.meta_data["data_type"] = self.DATA_TYPE_LOOKUP.get(data_type_int)
 
-        serialize_format = extract_bits(meta_byte, 3, 3)
-        if serialize_format == 0:
-            self.serialize_format = "txt"
-        elif serialize_format == 1:
-            self.serialize_format = "binary"
-        elif serialize_format == 2:
-            self.serialize_format = "json"
-        elif serialize_format == 3:
-            self.serialize_format = "xml"
+        # Extract serialize_format from bits 3 - 5
+        serialize_format_int = extract_bits(meta_byte, 3, 3)
+        self.meta_data["serialize_format"] = self.SERIALIZE_FORMAT_LOOKUP.get(serialize_format_int)
 
-        self.encrypted = (meta_byte >> 1) & 1
+        # Extract encryption value from bit 6
+        self.meta_data["encrypted"] = (meta_byte >> 1) & 1
 
-    def _finalise_payload(self, payload):
+    def _finalise_payload(self, payload: bytes) -> None:
+        """
+        Finalises and outputs the transfered file payload.
+        Deserializes, converts to specified output_format, and writes to file/stdout
+        Depending depending on specified configuration in self.server_context
+
+        Args:
+            payload: The file payload ready to be outputted.
+        """
         # Deserialize if dictionary_output_format is not original or if printing to screen
-        if (self.server_context.dictionary_output_format != "original" or
-            self.server_context.print_output_enabled):
-            if self.data_type == "dictionary":
-                if self.serialize_format == 'binary':
+        if (self.server_context["dictionary_output_format"] != "original" or
+            self.server_context["print_output_enabled"]):
+            if self.meta_data["data_type"] == "dictionary":
+                if self.meta_data["serialize_format"] == 'binary':
                     deserialized = pickle.loads(payload)
-                elif self.serialize_format == 'json':
+                elif self.meta_data["serialize_format"] == 'json':
                     deserialized = json.loads(payload.decode("utf-8"))
-                elif self.serialize_format == 'xml':
+                elif self.meta_data["serialize_format"] == 'xml':
                     root = ET.fromstring(payload)
                     deserialized = {child.tag: child.text for child in root}
-                if self.server_context.dictionary_output_format == "json":
+                if self.server_context["dictionary_output_format"] == "json":
                     deserialized = json.dumps(deserialized, indent=4)
             else:
                 deserialized = payload.decode("utf-8")
         if self.output_file:
-            if self.server_context.dictionary_output_format == "original":
+            if self.server_context["dictionary_output_format"] == "original":
                 self.output_file.write(payload)
             else:
                 self.output_file.write(deserialized.encode("utf-8"))
-        if self.print:
-            print(PRINTFORMAT.format(format=self.serialize_format,
-                                     src_ip=self.src_ip,
-                                     encrypted=repr(bool(self.encrypted)),
+        if self.server_context["print_output_enabled"]:
+            print(PRINTFORMAT.format(format=self.meta_data["serialize_format"],
+                                     src_ip=self.meta_data["src_ip"],
+                                     encrypted=repr(bool(self.meta_data["encrypted"])),
                                      message=deserialized))
 
-    def recieve_upload(self, final):
+    def recieve_upload(self, final: bool) -> None:
         """
-        The recieve_upload function ...
+        Recieved upload is the main entry point into TransferSession.
+        It is intended to iterate through the socket and continue reading the inbound file.
+        All payloads are pre-fixed with a big-endian 2-byte integer represent the packet size.
+        Final is used to tell the transfersession that this is the final payload for this file.
 
-        :param final:
+        Args:
+            final: Boolean specifying whether this is will be the final payload for this file.
         """
         # Payload always prefixed with two-bytes indicating size
         size_bytes = read_from_socket_upto_target(self.sock, 2)
-        self.transfer_size = int.from_bytes(size_bytes,"big")
-        payload = read_from_socket_upto_target(self.sock, self.transfer_size)
-        if self.encrypted:
+        self.meta_data["transfer_size"] = int.from_bytes(size_bytes,"big")
+        payload = read_from_socket_upto_target(self.sock, self.meta_data["transfer_size"])
+        if self.meta_data["encrypted"]:
             payload = self.decrypt(payload)
         if self.streamable:
             self._finalise_payload(payload)
+            if final:
+                self.close()
         else:
             self.payload += payload
-        if final:
-            self._finalise_payload(self.payload)
-            self.close()
+            if final:
+                self._finalise_payload(self.payload)
+                self.close()
 
 class ClientThread(Thread):
     """
-    This class creates the ClientThread object which..
-    """
+    The ClientThread object is a child of the Thread class from the Python threading library.
+    Each client connection has a dedicated thread to enable multiple clients to connect at once.
+    Each thread loops, iterating through the first byte of each packet the "operation byte".
+    The operation byte contains an instruction from the client which informs the server about the upcoming payload.
 
-    def __init__(self,ip,port,sock,server_context):
+    Class Attributes:
+        OPERATION_MODE_LOOKUP: Lookup for the operation mode.
+    
+    Instance Attributes:
+        ip: The source IP that opened the connection thread.
+        port: The source port that opened the connection thread.
+        sock: The socket where the session is being conducted from.
+        server_context: A dictionary containing the common server configuration.
+        session: The current file transfer session.
+        init: Whether this payload is the first of the current session/operation.
+        final: Whether this payload is the last of the current session/operation.
+    """
+    OPERATION_MODE_LOOKUP = {0: "TRANSFER",
+                             1: "END"}
+
+    def __init__(self, ip: str, port: int, sock: socket.socket, server_context: dict) -> None:
+        """
+        Initializes the ClientThread to track the current client/server session.
+        """
         Thread.__init__(self)
         self.ip = ip
         self.port = port
         self.sock = sock
         self.server_context = server_context
-        #print " New thread started for "+ip+":"+str(port)
         self.session = None
-        self.buffer = bytearray()
         # Operation Byte
         self.operation_mode = None
         self.init = None
         self.final = None
         print(f"Connection initiated by {ip}:{port}.")
 
-    def unpack_operation_byte(self, op_byte):
+    def unpack_operation_byte(self, op_byte: Union[int, bytes]) -> None:
         """
-        The unpack_operation_byte function ...
+        Parses the operation byte into the client instructions.
+        The operation_byte contains the context about the client's intentions including:
+            operation_mode: What does the client intend to do (transfer or end).
+            init: Is this the first payload of this operation.
+            final: Is this the final payload of this operation.
 
-        :param op_byte:
+        Args:
+            op_byte: The operation_byte as integer or bytes object.
+
         """
         if not isinstance(op_byte, int):
             op_byte = int.from_bytes(op_byte, "big")
-        status = extract_bits(op_byte, 0, 4)
-        if status == 0:
-            self.operation_mode = "TRANSFER"
-        elif status == 1:
-            self.operation_mode = "END"
-        else:
-            self.operation_mode = "ERROR"
+
+        operation_mode_int = extract_bits(op_byte, 0, 4)
+        self.operation_mode = self.OPERATION_MODE_LOOKUP.get(operation_mode_int, "ERROR")
+
         self.init = bool((op_byte >> 3) & 1)
+
         self.final = bool((op_byte >> 2) & 1)
 
-    def session_controller(self):
+    def session_controller(self) -> int:
         """
-        The session_controller function ...
+        This is the main entry/iteration point for the ClientThread.
+        The first byte on the socket is the operation_byte containing the instructions
+        from the client. This operation_byte is ingested and parsed, which triggers
+        the required instruction to initialise / iterate.
+
+        Returns:
+            Integer value. Non-zero represents an issue with the session, causing session to terminate.
         """
         op_byte = read_from_socket_upto_target(self.sock, 1)
         self.unpack_operation_byte(op_byte)
@@ -327,7 +410,7 @@ class ClientThread(Thread):
             if self.init:
                 if self.session:
                     raise DuplicateSession()
-                self.session = TransferSession(self.ip, self.sock, self.server_context)
+                self.session = TransferSession(self.sock, self.ip, self.server_context)
             # Ensure there is an active session before recieving:
             elif not self.session:
                 raise InvalidHeader("Uninitialised session")
@@ -344,37 +427,45 @@ class ClientThread(Thread):
             self.sock.close()
             if self.session:
                 self.session.close()
-            return 0
+            return 1
+        
+        return 0
 
-    def run(self):
+    def run(self) -> None:
+        """
+        The run function is called when the Thread is initialised and ready to be executed. 
+        This iterates through the packets packets from the given client
+        via the session_controller method.
+        """
         while True:
             try:
-                if self.session_controller() is not None:
+                if self.session_controller() > 0:
                     break
             except SessionException as e:
                 print(f"Transfer issue occured from {self.ip}: {repr(e)}")
                 break
 
-def main():
+def main() -> None:
     """
-        The main function ..
-        """
+    The main function is called if the server module is executed directly.
+    It initialises the server using the configuration specified in the ./etc/ directory
+    And setups the threading context to handle multiple clients simultaeneously.
+    """
     config = configparser.ConfigParser()
 
     etc_dir = paths.get_project_root() / "etc"
     default_config_filename = str(etc_dir / "default.ini")
     active_config_filename = str(etc_dir / "config.ini")
     config.read((default_config_filename, active_config_filename))
-    server_context = ServerContext(config)
+    server_context = initialize_server_context(config)
 
     tcpsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     tcpsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    #tcpsock.settimeout(30)
-    tcpsock.bind((server_context.tcp_host, server_context.tcp_port))
+    tcpsock.bind((server_context["tcp_host"], server_context["tcp_port"]))
+    tcpsock.listen(5)
     print("Server started.")
     threads = []
     while True:
-        tcpsock.listen(5)
         (conn, (ip,port)) = tcpsock.accept()
         newthread = ClientThread(ip,port,conn,server_context)
         newthread.start()
@@ -383,5 +474,6 @@ def main():
     for t in threads:
         t.join()
 
+# Call main() if executing as a module
 if __name__ == "__main__":
     main()

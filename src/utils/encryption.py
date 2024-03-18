@@ -1,3 +1,6 @@
+"""
+The utils.encryption module contains utilities to support file encryption.
+"""
 import os
 from cryptography.fernet import Fernet
 
