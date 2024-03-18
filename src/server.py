@@ -12,6 +12,7 @@ import configparser
 from threading import Thread
 from cryptography.fernet import Fernet
 
+BUFFER_SIZE = 1024
 
 PRINTFORMAT = """
 ===========================================
@@ -39,10 +40,6 @@ class UnsupportedTransfer(SessionException):
 
 class EncryptionError(SessionException):
     """An encryption error occured."""
-
-TCP_IP = 'localhost'
-TCP_PORT = 6868
-BUFFER_SIZE = 1024
 
 def extract_bits(int_byte, pos, count):
     """
@@ -90,6 +87,11 @@ class ServerContext():
 
         :param config:
         """
+        # Listening settings
+        listening_conf = config["listening"]
+        self.tcp_host = listening_conf["host"]
+        self.tcp_port = listening_conf.getint("port")
+
         # Encryption Settings
         encryption_conf = config["encryption"]
         self.encryption_enabled = encryption_conf.getboolean("enabled")
@@ -368,7 +370,7 @@ def main():
     tcpsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     tcpsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     #tcpsock.settimeout(30)
-    tcpsock.bind((TCP_IP, TCP_PORT))
+    tcpsock.bind((server_context.tcp_host, server_context.tcp_port))
     print("Server started.")
     threads = []
     while True:

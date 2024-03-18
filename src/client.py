@@ -8,9 +8,6 @@ import pickle
 import xml.etree.ElementTree as ET
 from cryptography.fernet import Fernet
 
-messages = ["Hello", "GroupB!"]
-MESSAGE_COUNT = len(messages)
-
 class ClientSession():
     """
     This class creates the ClientSession object which..
@@ -34,7 +31,7 @@ class ClientSession():
         self.encryption_key = Fernet(raw_key)
 
     def open(self, host="127.0.0.1", port=6868):
-         """
+        """
         The open function ...
 
         :param host: localhost
