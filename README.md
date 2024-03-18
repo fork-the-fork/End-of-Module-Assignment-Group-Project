@@ -68,8 +68,11 @@ The client and server use a bespoke application layer protcol to communicate. Th
 * Pre-fixed with a two-byte big-endian integer.
 
 ### Unit test
-to be updated.
 
+```bash
+# Execute the module directly using python:
+python ./src/unittest.py
+```
 ### License
 Distributed under the MIT License. See LICENSE.txt for more information.
 

@@ -1,5 +1,7 @@
 """
 This module contains the client side code.
+Module Attributes:
+    MAX_PAYLOAD (int): The max size per payload (size must fit in 2-byte integer) with Fernet.
 """
 
 import socket
@@ -11,6 +13,8 @@ from utils import paths
 from server import TransferSession
 from pathlib import Path
 from typing import Union
+
+MAX_PAYLOAD = 48000
 
 class ClientSession():
     """
@@ -85,7 +89,7 @@ class ClientSession():
         meta_int = data_type << 5 | serialize_format << 2 | int(self.encrypted) << 1
         meta_byte = meta_int.to_bytes(1, "big")
 
-        payload_steps = range(0,len(payload),65535)
+        payload_steps = range(0, len(payload), MAX_PAYLOAD)
         final_step = len(payload_steps) - 1
         init = 1
         final = 0
@@ -97,10 +101,9 @@ class ClientSession():
             if i == 0:
                 packet_bytes += meta_byte
                 init = 0
-            chunk = payload[chunk_slice:chunk_slice + 65535]
+            chunk = payload[chunk_slice:chunk_slice + MAX_PAYLOAD]
             if self.encrypted:
                 chunk = self.encryption_key.encrypt(chunk)
-
             packet_bytes += len(chunk).to_bytes(2, "big")
             packet_bytes += chunk
             self.sock.send(packet_bytes)
@@ -108,8 +111,7 @@ class ClientSession():
         print(response)
         if response == "OK":
             return 0
-        else:
-            return 1
+        return 1
 
     def _serialize_dict(self, data: dict, serialize_format: str) -> bytes:
         """

@@ -24,5 +24,4 @@ def expand_path(path_str: str) -> Path:
     """
     if path_str[0] == ".":
         return get_project_root() / Path(path_str)
-    else:
-        return Path(path_str)
+    return Path(path_str)
