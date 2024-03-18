@@ -1,8 +1,6 @@
 import socket
-import sys
-import time
+import utils.paths as paths
 from datetime import datetime
-from pathlib import Path
 import json
 import pickle
 import xml.etree.ElementTree as ET
@@ -67,13 +65,15 @@ class ServerContext():
         # Encryption Settings
         encryption_conf = config["encryption"]
         self.encryption_enabled = encryption_conf.getboolean("enabled")
-        self.symmetric_key_file = encryption_conf["symmetric_key_file"]
+        symmetric_key_file_name = encryption_conf["symmetric_key_file"]
+        self.symmetric_key_file = paths.expand_path(symmetric_key_file_name)
 
         # Server Output Settings
         output_conf = config["output"]
         self.file_output_enabled = output_conf.getboolean("file_output_enabled")
-        self.file_output_directory = output_conf["file_output_directory"]
-        self.file_output_format = output_conf["file_output_format"]
+        file_output_directory_name = output_conf["file_output_directory"]
+        self.file_output_directory = paths.expand_path(file_output_directory_name)
+        self.dictionary_output_format = output_conf["dictionary_output_format"]
         self.file_name_format = output_conf["file_name_format"]
         self.print_output_enabled = output_conf.getboolean("print_output_enabled")
 
@@ -130,9 +130,11 @@ class TransferSession():
         else:
             self.streamable = False
         
-        if self.server_context.file_output_format == "original":
-            self.output_format = self.serialize_format
-        else:
+        # Output in original format unless file is a dictionary and output mode
+        # is set to json.
+        self.output_format = self.serialize_format
+        if (self.data_type == "dictionary" and
+            self.server_context.dictionary_output_format == "json"):
             self.output_format = "json"
         
         # Open up streams ready for writing
@@ -142,7 +144,7 @@ class TransferSession():
                 source=src_ip,
                 format = self.output_format
                 )
-            file_path = Path(self.server_context.file_output_directory) / file_name
+            file_path = self.server_context.file_output_directory / file_name
             self.output_file = open(file_path, "wb")
         if self.server_context.print_output_enabled:
             self.print = True
@@ -179,8 +181,9 @@ class TransferSession():
         self.encrypted = (meta_byte >> 1) & 1
     
     def _finalise_payload(self, payload):
-        # Deserialize if file_output_format is not original or if printing to screen
-        if self.server_context.file_output_format != "original" or self.server_context.print_output_enabled:
+        # Deserialize if dictionary_output_format is not original or if printing to screen
+        if (self.server_context.dictionary_output_format != "original" or
+            self.server_context.print_output_enabled):
             if self.data_type == "dictionary":
                 if self.serialize_format == 'binary':
                     deserialized = pickle.loads(payload)
@@ -189,12 +192,12 @@ class TransferSession():
                 elif self.serialize_format == 'xml':
                     root = ET.fromstring(payload)
                     deserialized = {child.tag: child.text for child in root}
-                if self.server_context.file_output_format == "json":
+                if self.server_context.dictionary_output_format == "json":
                     deserialized = json.dumps(deserialized, indent=4)
             else:
                 deserialized = payload.decode("utf-8")
         if self.output_file:
-            if self.server_context.file_output_format == "original":
+            if self.server_context.dictionary_output_format == "original":
                 self.output_file.write(payload)
             else:
                 self.output_file.write(deserialized.encode("utf-8"))
@@ -273,7 +276,7 @@ class ClientThread(Thread):
             self.sock.shutdown(2)
             self.sock.close()
             if self.session:
-                self.session._close()
+                self.session.close()
             return 0
 
     def run(self):
@@ -288,7 +291,7 @@ class ClientThread(Thread):
 def main():
     config = configparser.ConfigParser()
 
-    etc_dir = Path(__file__).parent.parent / "etc"
+    etc_dir = paths.get_project_root() / "etc"
     default_config_filename = str(etc_dir / "default.ini")
     active_config_filename = str(etc_dir / "config.ini")
     config.read((default_config_filename, active_config_filename))
