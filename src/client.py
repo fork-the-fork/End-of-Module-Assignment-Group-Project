@@ -34,7 +34,7 @@ class ClientSession():
         self.encryption_key = Fernet(raw_key)
 
     def open(self, host="127.0.0.1", port=6868):
-         """
+        """
         The open function ...
 
         :param host: localhost
