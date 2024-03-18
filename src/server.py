@@ -50,7 +50,7 @@ def extract_bits(int_byte: int, pos: int, count: int) -> int:
     Args:
         int_byte: the byte to read in integer format.
         pos: the bit-position to start reading (zero-based)
-        count: the number of bits to count
+        count: the number of bits to count (at-least 1)
 
     Returns:
         The integer value of the shifted int_byte.
@@ -239,7 +239,7 @@ class TransferSession():
             self.output_file.close()
             self.output_file = None
 
-    def decrypt(self,payload: bytes) -> bytes:
+    def decrypt(self, payload: bytes) -> bytes:
         """
         Decrypts the encrypted payload using context provided by the server_context settings.
 
@@ -487,6 +487,7 @@ def main() -> None:
     active_config_filename = str(etc_dir / "config.ini")
     config.read((default_config_filename, active_config_filename))
     server_context = initialize_server_context(config)
+    print(server_context)
 
     tcpsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     tcpsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

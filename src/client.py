@@ -104,7 +104,12 @@ class ClientSession():
             packet_bytes += len(chunk).to_bytes(2, "big")
             packet_bytes += chunk
             self.sock.send(packet_bytes)
-        print(self.sock.recv(4096).decode("utf-8"))
+        response = self.sock.recv(4096).decode("utf-8")
+        print(response)
+        if response == "OK":
+            return 0
+        else:
+            return 1
 
     def _serialize_dict(self, data: dict, serialize_format: str) -> bytes:
         """
@@ -143,7 +148,7 @@ class ClientSession():
         if serialize_format not in ("binary", "json", "xml"):
             raise NotImplementedError("Unsupported serialization format.")
         payload = self._serialize_dict(dic, serialize_format)
-        self._transfer_raw("dictionary", serialize_format, payload)
+        return self._transfer_raw("dictionary", serialize_format, payload)
 
     def send_text(self, msg: str) -> None:
         """
@@ -154,7 +159,7 @@ class ClientSession():
         """
         if not isinstance(msg, (bytes, bytearray)):
             msg = msg.encode("utf-8")
-        self._transfer_raw("text", "txt", msg)
+        return self._transfer_raw("text", "txt", msg)
 
     def send_text_file(self, file_name: str) -> None:
         """
@@ -166,7 +171,7 @@ class ClientSession():
         expanded_file_name = paths.expand_path(file_name)
         with open(expanded_file_name,"rb") as f:
             text_contents = f.read()
-        self.send_text(text_contents)
+        return self.send_text(text_contents)
 
     def close(self) -> None:
         """
