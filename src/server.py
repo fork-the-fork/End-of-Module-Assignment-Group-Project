@@ -3,7 +3,7 @@ This file contains the server-side code.
 """
 
 import socket
-import utils.paths as paths
+from utils import paths
 from datetime import datetime
 import json
 import pickle
@@ -50,7 +50,7 @@ def extract_bits(int_byte: int, pos: int, count: int) -> int:
     Args:
         int_byte: the byte to read in integer format.
         pos: the bit-position to start reading (zero-based)
-        count: the number of bits to count
+        count: the number of bits to count (at-least 1)
 
     Returns:
         The integer value of the shifted int_byte.
@@ -77,7 +77,7 @@ def read_from_socket_upto_target(sock: socket.socket, target_size: int) -> bytea
 
     data = bytearray()
     while target_size > 0:
-        buffer = sock.recv(min(target_size, BUFFER_SIZE), socket.MSG_WAITALL)
+        buffer = sock.recv(min(target_size, BUFFER_SIZE))
         data += buffer
         target_size -= len(buffer)
     return data
@@ -139,24 +139,30 @@ class TransferSession():
     and deserialized at the end. Unlike text files which can be outputted in chunks (streamable).
 
     Class Attributes:
-        DATA_TYPE_LOOKUP: Lookup for the data_type integer value
-        SERIALIZE_FORMAT_LOOKUP: Lookup for the serialization format integer value
-    
+        DATA_TYPE_INT_LOOKUP: Lookup for the data_type integer value
+        DATA_TYPE_NAME_LOOKUP: Lookup for the data_type name value
+        SERIALIZE_FMT_INT_LOOKUP: Lookup for the serialization format integer value
+        SERIALIZE_FMT_NAME_LOOKUP: Lookup for the serialization format integer value
+
     Instance Attributes:
         meta_data: Stores the meta_data of the file being transferred.
         sock: The socket where the file is being transferred from.
         server_context: A dictionary containing the common server configuration.
         streamable: Whether or not the file can be streamed (written in chunks per packet)
         output_file: An open file io stream to write the transferred file to.
-        payload: A bytearray containing the transferred payload (Used for payloads spanning multiple packets).
+        payload: A bytearray to store the payload (for payloads spanning multiple packets).
     """
-    DATA_TYPE_LOOKUP = {0: "text",
-                        1: "dictionary"}
-    
-    SERIALIZE_FORMAT_LOOKUP = {0: "txt",
+    DATA_TYPE_INT_LOOKUP = {0: "text",
+                            1: "dictionary"}
+
+    DATA_TYPE_NAME_LOOKUP = {v:k for k,v in DATA_TYPE_INT_LOOKUP.items()}
+
+    SERIALIZE_FMT_INT_LOOKUP = {0: "txt",
                                1: "binary",
                                2: "json",
                                3: "xml"}
+
+    SERIALIZE_FMT_NAME_LOOKUP = {v:k for k,v in SERIALIZE_FMT_INT_LOOKUP.items()}
 
     def __init__(self, sock: socket.socket, src_ip: str, server_context: dict) -> None:
         """
@@ -199,7 +205,8 @@ class TransferSession():
         # Serialization validation
         if not self.meta_data["serialize_format"]:
             raise UnsupportedTransfer("Invalid serialization format specified.")
-        elif self.meta_data["serialize_format"] == "binary" and not self.server_context["pickle_enabled"]:
+        if (self.meta_data["serialize_format"] == "binary"
+            and not self.server_context["pickle_enabled"]):
             raise UnsupportedTransfer("Pickling disabled.")
 
         # If the serialize format is not 0 (plaintext) then the file is not streamable
@@ -232,7 +239,7 @@ class TransferSession():
             self.output_file.close()
             self.output_file = None
 
-    def decrypt(self,payload: bytes) -> bytes:
+    def decrypt(self, payload: bytes) -> bytes:
         """
         Decrypts the encrypted payload using context provided by the server_context settings.
 
@@ -244,8 +251,8 @@ class TransferSession():
         """
         try:
             return self.server_context["symmetric_key"].decrypt(bytes(payload))
-        except ValueError:
-            raise EncryptionError
+        except ValueError as exc:
+            raise EncryptionError from exc
 
     def unpack_meta_byte(self, meta_byte: Union[bytes, int]) -> None:
         """
@@ -260,14 +267,14 @@ class TransferSession():
         """
         if not isinstance(meta_byte, int):
             meta_byte = int.from_bytes(meta_byte, "big")
-        
+
         # Extract data_type from bits 0 - 2
         data_type_int = extract_bits(meta_byte, 0, 3)
-        self.meta_data["data_type"] = self.DATA_TYPE_LOOKUP.get(data_type_int)
+        self.meta_data["data_type"] = self.DATA_TYPE_INT_LOOKUP.get(data_type_int)
 
         # Extract serialize_format from bits 3 - 5
         serialize_format_int = extract_bits(meta_byte, 3, 3)
-        self.meta_data["serialize_format"] = self.SERIALIZE_FORMAT_LOOKUP.get(serialize_format_int)
+        self.meta_data["serialize_format"] = self.SERIALIZE_FMT_INT_LOOKUP.get(serialize_format_int)
 
         # Extract encryption value from bit 6
         self.meta_data["encrypted"] = (meta_byte >> 1) & 1
@@ -338,7 +345,8 @@ class ClientThread(Thread):
     The ClientThread object is a child of the Thread class from the Python threading library.
     Each client connection has a dedicated thread to enable multiple clients to connect at once.
     Each thread loops, iterating through the first byte of each packet the "operation byte".
-    The operation byte contains an instruction from the client which informs the server about the upcoming payload.
+    The operation byte contains an instruction from the client which informs the server
+    about the upcoming payload.
 
     Class Attributes:
         OPERATION_MODE_LOOKUP: Lookup for the operation mode.
@@ -361,7 +369,6 @@ class ClientThread(Thread):
         """
         Thread.__init__(self)
         self.ip = ip
-        self.port = port
         self.sock = sock
         self.server_context = server_context
         self.session = None
@@ -370,6 +377,22 @@ class ClientThread(Thread):
         self.init = None
         self.final = None
         print(f"Connection initiated by {ip}:{port}.")
+
+    def send_message(self, message: Union[str, bytes]) -> None:
+        """
+        Best effort to send a message to the client, however, fails silently.
+        This is intentional to prevent interrupts to ongoing file transfers.
+
+        Args:
+            message: The operation_byte as integer or bytes object.
+
+        """
+        if isinstance(message, str):
+            message = message.encode("utf-8")
+        try:
+            self.sock.send(message)
+        except socket.error:
+            pass
 
     def unpack_operation_byte(self, op_byte: Union[int, bytes]) -> None:
         """
@@ -401,7 +424,7 @@ class ClientThread(Thread):
         the required instruction to initialise / iterate.
 
         Returns:
-            Integer value. Non-zero represents an issue with the session, causing session to terminate.
+            Status. Non-zero represents an issue with the session, causing session to terminate.
         """
         op_byte = read_from_socket_upto_target(self.sock, 1)
         self.unpack_operation_byte(op_byte)
@@ -419,16 +442,17 @@ class ClientThread(Thread):
 
             # Remove the session if this is the final packet.
             if self.final:
+                self.send_message("OK")
                 self.session = None
 
         elif self.operation_mode == "END":
-            print(f"Connection closed by {self.ip}:{self.port}.")
+            print(f"Connection closed by {self.ip}.")
             self.sock.shutdown(2)
             self.sock.close()
             if self.session:
                 self.session.close()
             return 1
-        
+
         return 0
 
     def run(self) -> None:
@@ -441,9 +465,14 @@ class ClientThread(Thread):
             try:
                 if self.session_controller() > 0:
                     break
-            except SessionException as e:
-                print(f"Transfer issue occured from {self.ip}: {repr(e)}")
-                break
+            except Exception as exc: # pylint: disable=broad-exception-caught
+                print(f"Issue occured with {self.ip}: {repr(exc)}")
+                if isinstance(exc, socket.error):
+                    # Socket has died, close thread.
+                    break
+                # If the issue was caused by the client, reply with the error details.
+                if isinstance(exc, SessionException):
+                    self.send_message(f"ERROR: {repr(exc)}")
 
 def main() -> None:
     """
@@ -458,6 +487,7 @@ def main() -> None:
     active_config_filename = str(etc_dir / "config.ini")
     config.read((default_config_filename, active_config_filename))
     server_context = initialize_server_context(config)
+    print(server_context)
 
     tcpsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     tcpsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -467,7 +497,8 @@ def main() -> None:
     threads = []
     while True:
         (conn, (ip,port)) = tcpsock.accept()
-        newthread = ClientThread(ip,port,conn,server_context)
+        conn.settimeout(CLIENT_TIMEOUT)
+        newthread = ClientThread(ip, port, conn, server_context)
         newthread.start()
         threads.append(newthread)
 
