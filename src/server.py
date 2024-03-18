@@ -1,5 +1,9 @@
 """
 This file contains the server-side code.
+Module Attributes:
+    BUFFER_SIZE (int): The amount of bytes read from the socket when recieving files per iteration
+    CLIENT_TIMEOUT (int): Timeout in seconds for an open client/socket thread.
+    PRINTFORMAT (str): The format to output transferred files with.
 """
 
 import socket
